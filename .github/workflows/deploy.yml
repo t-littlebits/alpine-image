@@ -1,0 +1,72 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      IMAGE_SIZE:
+        type: string
+        description: 'Image size, 950M max'
+        required: true
+        default: '950M'
+      GITHUB_RELEASE:
+        type: boolean
+        description: 'Upload GitHub release'
+        required: true
+        default: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      TAG: "ext2-alpine-image"
+      IMAGE_SIZE: '${{ github.event.inputs.IMAGE_SIZE }}'
+      IMAGE_NAME: "cheerpXImage.ext2"
+      DOCKERFILE_PATH: "Dockerfile"
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build . --tag $TAG --file ${{ env.DOCKERFILE_PATH }} --platform=i386
+      - run: |
+          docker run --dns 8.8.8.8 --dns 8.8.4.4 -d $TAG
+          echo "CONTAINER_ID=$(sudo docker ps -aq)" >> $GITHUB_ENV
+      - name: Extracting CMD / Entrypoint and args
+        shell: bash
+        run: |
+          cmd=$(sudo docker inspect --format='{{json .Config.Cmd}}' $CONTAINER_ID)
+          entrypoint=$(sudo docker inspect --format='{{json .Config.Entrypoint}}' $CONTAINER_ID)
+          if [[ $entrypoint != "null" && $cmd != "null" ]]; then
+            echo "CMD=$( sudo docker inspect $CONTAINER_ID | jq --compact-output '.[0].Config.Entrypoint' )" >> $GITHUB_ENV
+            echo "ARGS=$( sudo docker inspect $CONTAINER_ID | jq --compact-output '.[0].Config.Cmd' )" >> $GITHUB_ENV
+          elif [[ $cmd != "null" ]]; then
+            echo "CMD=$( sudo docker inspect $CONTAINER_ID | jq --compact-output '.[0].Config.Cmd[:1]' )" >> $GITHUB_ENV
+            echo "ARGS=$( sudo docker inspect $CONTAINER_ID | jq --compact-output '.[0].Config.Cmd[1:]' )" >> $GITHUB_ENV
+          else
+            echo "CMD=$( sudo docker inspect $CONTAINER_ID | jq --compact-output '.[0].Config.Entrypoint[:1]' )" >> $GITHUB_ENV
+            echo "ARGS=$( sudo docker inspect $CONTAINER_ID | jq --compact-output '.[0].Config.Entrypoint[1:]' )" >> $GITHUB_ENV
+          fi
+      - name: Extracting env, args and cwd.
+        shell: bash
+        run: |
+          echo "ENV=$( sudo docker inspect $CONTAINER_ID | jq --compact-output  '.[0].Config.Env' )" >> $GITHUB_ENV
+          echo "CWD=$( sudo docker inspect $CONTAINER_ID | jq --compact-output '.[0].Config.WorkingDir' )" >> $GITHUB_ENV
+      - name: Create ext2 image.
+        run: |
+         sudo fallocate -l $IMAGE_SIZE ${{ env.IMAGE_NAME }}
+         sudo mkfs.ext2 -r 0 ${{ env.IMAGE_NAME }}
+         sudo mount -o loop -t ext2 ${{ env.IMAGE_NAME }} /mnt/
+      - name: Export and unpack container filesystem contents into mounted ext2 image.
+        run: | 
+          sudo docker cp -a ${CONTAINER_ID}:/ /mnt/
+          sudo umount /mnt/
+      - name: github release
+        if: ${{ github.event.inputs.GITHUB_RELEASE == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          target_commitish: ${{ github.sha }}
+          tag_name: "1.0"
+          fail_on_unmatched_files: 'true'
+          files: |
+            ${{ env.IMAGE_NAME }}
