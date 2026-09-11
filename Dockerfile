@@ -1,4 +1,5 @@
 FROM --platform=linux/i386 docker.io/i386/debian:buster
+
 ARG DEBIAN_FRONTEND=noninteractive
 
 # Point APT to the archived mirrors (Buster is EOL)
@@ -7,7 +8,11 @@ RUN echo "deb [trusted=yes] http://archive.debian.org/debian buster main contrib
   echo "deb [trusted=yes] http://archive.debian.org/debian-security buster/updates main" \
   >> /etc/apt/sources.list
 
-RUN apt-get update && apt-get -y install xorg lightdm i3 xterm gedit
+# Install only essential packages and clean up APT cache
+RUN apt-get update && \
+    apt-get -y install --no-install-recommends xorg lightdm i3 xterm gedit && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Add a user
 RUN useradd -m -s /bin/bash user && echo 'user:password' | chpasswd
